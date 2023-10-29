@@ -3,8 +3,8 @@ import 'dart:io';
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
-import 'package:projeto_cicero/controller/home_page_controller.dart';
 
+import '../../controller/home_page_controller.dart';
 import 'components/text_field_components.dart';
 
 class HomePage extends StatelessWidget {
@@ -12,7 +12,7 @@ class HomePage extends StatelessWidget {
     final controller = Get.find<HomePageController>();
 
     return Scaffold(
-      backgroundColor: Colors.indigo,
+      backgroundColor: Colors.white,
       appBar: AppBar(
         title: Text(
           'Leitor de Placas',
@@ -26,7 +26,7 @@ class HomePage extends StatelessWidget {
       body: Obx(
         () => !controller.isButton.value
             ? Container(
-                decoration: BoxDecoration(
+                decoration: const BoxDecoration(
                   gradient: LinearGradient(
                     begin: Alignment.topCenter,
                     end: Alignment.bottomCenter,
@@ -113,30 +113,6 @@ class HomePage extends StatelessWidget {
                         child: AspectRatio(
                           aspectRatio: controller.controller.value.aspectRatio,
                           child: CameraPreview(controller.controller),
-                        ),
-                      ),
-                    ),
-                    Padding(
-                      padding: EdgeInsets.symmetric(vertical: 10),
-                      child: ElevatedButton(
-                        onPressed: () => controller.takePicture(context),
-                        style: ElevatedButton.styleFrom(
-                          primary: Colors.blue, // Cor de fundo
-                          onPrimary: Colors.white, // Cor do texto
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(
-                                10.0), // Borda arredondada
-                          ),
-                          padding: EdgeInsets.symmetric(
-                              horizontal: 20,
-                              vertical: 12), // Espaçamento interno
-                        ),
-                        child: Text(
-                          'Capturar Placa',
-                          style: TextStyle(
-                            fontSize: 20, // Tamanho da fonte
-                            fontWeight: FontWeight.bold, // Negrito
-                          ),
                         ),
                       ),
                     ),

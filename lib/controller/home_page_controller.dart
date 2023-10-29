@@ -1,14 +1,20 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:fluttertoast/fluttertoast.dart';
 import 'package:get/get.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:geolocator/geolocator.dart';
-import 'package:projeto_cicero/provider/falcon.dart';
 import 'package:camera/camera.dart';
 import 'package:google_ml_kit/google_ml_kit.dart';
+
+import 'package:intl/intl.dart';
+import 'package:projeto_cicero/infra/falcon_api.dart';
+import 'package:projeto_cicero/models/falcon_model.dart';
+import 'package:assets_audio_player/assets_audio_player.dart';
 
 class HomePageController extends GetxController
     with GetSingleTickerProviderStateMixin {
@@ -20,80 +26,136 @@ class HomePageController extends GetxController
     super.onInit();
   }
 
+  RxBool isWifi = false.obs;
+
+  Future<void> buscarPlacaSalvaOff() async {
+    if (isWifi.value) {
+      final lista_veiculos = await FalconModel.get();
+      if (lista_veiculos.isNotEmpty) {
+        for (var x in lista_veiculos) {
+          var falcon = FalconApi();
+          Map<String, dynamic> chave = {
+            "placa": x["placa"],
+            "latlong": x["latlong"],
+            "datahora": x["datahora"],
+            "nick_usuario": 'teste',
+          };
+          final conn = await falcon.enviarVeiculo(chave);
+        }
+      }
+      await FalconModel.clear();
+    }
+  }
+
+  bool isBusy = false;
+  late Timer _timer;
+  double _currentZoom = 1.0;
+
   RxBool isButton = false.obs;
 
   late CameraController controller;
+
   RxBool isCameraInitialized = false.obs;
   TextDetector textDetector = GoogleMlKit.vision.textDetector();
 
   Future<void> initializeCamera() async {
     final cameras = await availableCameras();
-    controller = CameraController(cameras[0], ResolutionPreset.high);
+
+    controller = CameraController(cameras[0], ResolutionPreset.medium);
     await controller.initialize();
+    String filePath =
+        'assets/sons/insercao.mp3'; // Substitua pelo caminho real do seu arquivo
+
     isCameraInitialized.value = true;
+    _timer = Timer.periodic(Duration(seconds: 5), (Timer t) {
+      if (!isBusy) {
+        takePicture();
+      }
+    });
   }
 
-  Future<void> takePicture(context) async {
+  Future<void> takePicture() async {
+    if (!controller.value.isInitialized || isBusy) {
+      return;
+    }
+    isBusy = true;
+
     try {
-      final image = await controller.takePicture();
+      double maxZoom = await controller.getMaxZoomLevel();
+      double minZoom = await controller.getMinZoomLevel();
+
+      double targetZoom = minZoom + (maxZoom - minZoom) / 2;
+      await controller.setZoomLevel(targetZoom);
+
+      // Aqui, capturamos a imagem.
+      final XFile image = await controller.takePicture();
       final inputImage = InputImage.fromFilePath(image.path);
-      final textRecognised = await textDetector.processImage(inputImage);
+      final RecognisedText recognisedText =
+          await textDetector.processImage(inputImage);
 
       String ocrText = "";
 
-      for (TextBlock block in textRecognised.blocks) {
+      for (TextBlock block in recognisedText.blocks) {
         ocrText = block.text;
-        final teste = isLicensePlate(ocrText);
-        if (teste == true) {
-          break;
+        if (isLicensePlate(ocrText)) {
+          // Se é uma placa de licença, faça algo com o texto (ex: mostrar na tela)
+          try {
+            DateTime agora = DateTime.now();
+            String timestampFormatado =
+                DateFormat('yyyy-MM-dd HH:mm:ss').format(agora);
+            var falcon = FalconApi();
+            Map<String, dynamic> chave = {
+              "placa": ocrText,
+              "latlong": '${lat?.value.text} ${long?.value.text}',
+              "datahora": timestampFormatado,
+              "nick_usuario": 'teste',
+            };
+            final conn = await falcon.enviarVeiculo(chave);
+
+            Fluttertoast.showToast(
+                msg: "Nova placa detectada!",
+                toastLength: Toast
+                    .LENGTH_SHORT, // Defina a duração do toast. Pode ser LENGTH_SHORT (curto) ou LENGTH_LONG (longo)
+                gravity: ToastGravity
+                    .BOTTOM, // Posição na tela onde o toast deve aparecer. Pode ser TOP, BOTTOM, CENTER
+                timeInSecForIosWeb:
+                    1, // Duração em segundos para exibição em iOS e web
+                backgroundColor: Colors.green, // Cor de fundo do toast
+                textColor: Colors.white, // Cor do texto
+                fontSize: 16.0 // Tamanho do texto
+                );
+            AssetsAudioPlayer.newPlayer().open(
+              Audio("assets/sons/insercao.mp3"),
+              showNotification: true,
+            );
+            await controller.setZoomLevel(minZoom);
+            break;
+          } catch (e) {
+            Fluttertoast.showToast(
+                msg: "Erro ao inserir placa!",
+                toastLength: Toast
+                    .LENGTH_SHORT, // Defina a duração do toast. Pode ser LENGTH_SHORT (curto) ou LENGTH_LONG (longo)
+                gravity: ToastGravity
+                    .BOTTOM, // Posição na tela onde o toast deve aparecer. Pode ser TOP, BOTTOM, CENTER
+                timeInSecForIosWeb:
+                    1, // Duração em segundos para exibição em iOS e web
+                backgroundColor: Colors.red, // Cor de fundo do toast
+                textColor: Colors.white, // Cor do texto
+                fontSize: 16.0 // Tamanho do texto
+                );
+          }
+
+          // Sair do loop se uma placa de licença válida for encontrada.
         }
       }
 
-      if (isLicensePlate(ocrText)) {
-        // Display the recognized license plate text in the UI
-        Get.defaultDialog(
-          backgroundColor: Colors.indigo,
-          title: "Informações do Veículo",
-          titleStyle: TextStyle(color: Colors.white),
-          content: Container(
-            child: Column(
-              children: [
-                ListTile(
-                  leading: Icon(Icons.directions_car, color: Colors.blue),
-                  title: Text("Placa: $ocrText",
-                      style: TextStyle(
-                        fontWeight: FontWeight.bold,
-                        color: Colors.white,
-                      )),
-                ),
-                ListTile(
-                  leading: Icon(Icons.location_on, color: Colors.green),
-                  title: Text("Latitude: ${lat?.value.text}",
-                      style: TextStyle(
-                        fontWeight: FontWeight.bold,
-                        color: Colors.white,
-                      )),
-                ),
-                ListTile(
-                  leading: Icon(Icons.location_on, color: Colors.red),
-                  title: Text("Longitude: ${long?.value.text}",
-                      style: TextStyle(
-                        fontWeight: FontWeight.bold,
-                        color: Colors.white,
-                      )),
-                ),
-              ],
-            ),
-          ),
-          textConfirm: "Fechar",
-          confirmTextColor: Colors.white,
-          onConfirm: () {
-            Get.back();
-          },
-        );
-      }
+      // Após processar a imagem, você pode querer excluir o arquivo da imagem capturada para economizar espaço.
+      final file = File(image.path);
+      await file.delete();
     } catch (e) {
       print(e);
+    } finally {
+      isBusy = false; // Permite que a próxima captura ocorra.
     }
   }
 
@@ -106,19 +168,17 @@ class HomePageController extends GetxController
   }
 
   bool isLicensePlate(String text) {
-    // Defina a expressão regular para validar as placas do seu país
     RegExp plateRegExp = RegExp(
         r"^[A-Z]{3}-\d{4}$|^[A-Z]{3}\d[A-Z]\d{2}$|^[A-Z]{3}\d{1}[A-Z]{1}\d{2}$");
     return plateRegExp.hasMatch(text);
   }
 
   void showLicensePlate(String ocrText) {
-    // Exiba a placa do veículo, por exemplo, em um diálogo ou na interface do aplicativo
     print("Placa do Veículo: $ocrText");
   }
 
   Future<dynamic> envioInforma() async {
-    var falcon = Falcon();
+    var falcon = FalconApi();
     File imagefile = File(imageFileList!.first.path);
     Uint8List imagebytes = await imagefile.readAsBytes();
     String base64string = base64.encode(imagebytes);
@@ -129,7 +189,7 @@ class HomePageController extends GetxController
       "timestamp": DateTime.now().millisecondsSinceEpoch,
     };
     print(chave);
-    final conn = await falcon.conection(chave);
+    final conn = await falcon.enviarVeiculo(chave);
     print(conn);
   }
 
@@ -166,102 +226,5 @@ class HomePageController extends GetxController
     Get.forceAppUpdate();
 
     return await Geolocator.getCurrentPosition();
-  }
-
-  Future abrirCamera() async {
-    final XFile? photo = await _picker.pickImage(
-      source: ImageSource.camera,
-      preferredCameraDevice: CameraDevice.front,
-      maxHeight: 640,
-      maxWidth: 320,
-    );
-
-    imageFileList?.add(photo!);
-    print(imageFileList);
-    Get.forceAppUpdate();
-  }
-
-  Future<void> openOptions({
-    required BuildContext context,
-  }) async {
-    await showModalBottomSheet(
-      context: context,
-      builder: (context) {
-        final ImagePicker _picker = ImagePicker();
-        XFile? _image;
-        return Container(
-          padding: const EdgeInsets.all(10),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: <Widget>[
-              if (imageFileList != null)
-                ListTile(
-                  leading: const Icon(
-                    Icons.photo_library,
-                    color: Colors.blue,
-                  ),
-                  title: Text(
-                    'Adicionar foto da galeria',
-                  ),
-                  onTap: () async {
-                    try {
-                      final XFile? _image = await _picker.pickImage(
-                        source: ImageSource.gallery,
-                        maxHeight: 640,
-                        maxWidth: 320,
-                      );
-                      imageFileList?.add(_image!);
-                      Get.forceAppUpdate();
-                    } catch (e) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text('Não foi possível selecionar a foto'),
-                        ),
-                      );
-                    }
-                  },
-                ),
-              Divider(
-                color: Colors.grey,
-                height: 2,
-              ),
-              ListTile(
-                leading: const Icon(
-                  Icons.camera_alt,
-                  color: Colors.blue,
-                ),
-                title: Text(
-                  'Tirar foto com a câmera',
-                ),
-                onTap: () async {
-                  try {
-                    final XFile? _image = await _picker.pickImage(
-                      source: ImageSource.camera,
-                      preferredCameraDevice: CameraDevice.front,
-                      maxHeight: 640,
-                      maxWidth: 320,
-                    );
-                    imageFileList?.add(_image!);
-                    Get.forceAppUpdate();
-                  } catch (e) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        backgroundColor: Colors.red,
-                        content: Text(
-                          'Não foi possível abrir a câmera',
-                        ),
-                      ),
-                    );
-                  }
-                },
-              ),
-              SizedBox(
-                height: 20,
-              )
-            ],
-          ),
-        );
-      },
-    );
   }
 }
