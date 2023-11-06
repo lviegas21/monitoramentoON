@@ -1,20 +1,25 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
+import 'package:assets_audio_player/assets_audio_player.dart';
+import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:fluttertoast/fluttertoast.dart';
-import 'package:get/get.dart';
-import 'package:image_picker/image_picker.dart';
 import 'package:geolocator/geolocator.dart';
-import 'package:camera/camera.dart';
+import 'package:get/get.dart';
 import 'package:google_ml_kit/google_ml_kit.dart';
-
+import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart';
-import 'package:projeto_cicero/infra/falcon_api.dart';
-import 'package:projeto_cicero/models/falcon_model.dart';
-import 'package:assets_audio_player/assets_audio_player.dart';
+
+import 'package:image/image.dart' as img;
+import '../infra/falcon_api.dart';
+import '../models/falcon_model.dart';
+import 'package:tflite_flutter/tflite_flutter.dart' as tfl;
+import 'package:tflite_flutter/tflite_flutter.dart';
+import 'package:tflite_v2/tflite_v2.dart';
 
 class HomePageController extends GetxController
     with GetSingleTickerProviderStateMixin {
@@ -26,26 +31,14 @@ class HomePageController extends GetxController
     super.onInit();
   }
 
-  RxBool isWifi = false.obs;
-
-  Future<void> buscarPlacaSalvaOff() async {
-    if (isWifi.value) {
-      final lista_veiculos = await FalconModel.get();
-      if (lista_veiculos.isNotEmpty) {
-        for (var x in lista_veiculos) {
-          var falcon = FalconApi();
-          Map<String, dynamic> chave = {
-            "placa": x["placa"],
-            "latlong": x["latlong"],
-            "datahora": x["datahora"],
-            "nick_usuario": 'teste',
-          };
-          final conn = await falcon.enviarVeiculo(chave);
-        }
-      }
-      await FalconModel.clear();
-    }
+  loadmodel() async {
+    await Tflite.loadModel(
+        model: 'assets/model.tflite', labels: 'assets/labels.txt');
   }
+
+  Interpreter? interpreter;
+
+  RxBool isWifi = false.obs;
 
   bool isBusy = false;
   late Timer _timer;
@@ -60,6 +53,9 @@ class HomePageController extends GetxController
 
   Future<void> initializeCamera() async {
     final cameras = await availableCameras();
+    loadmodel().then((value) {
+      print('deu certo');
+    });
 
     controller = CameraController(cameras[0], ResolutionPreset.medium);
     await controller.initialize();
@@ -67,11 +63,27 @@ class HomePageController extends GetxController
         'assets/sons/insercao.mp3'; // Substitua pelo caminho real do seu arquivo
 
     isCameraInitialized.value = true;
-    _timer = Timer.periodic(Duration(seconds: 5), (Timer t) {
+    _timer = Timer.periodic(Duration(seconds: 10), (Timer t) {
       if (!isBusy) {
         takePicture();
       }
     });
+  }
+
+  Uint8List imageToByteListFloat32(
+      img.Image image, int inputSize, double mean, double std) {
+    var convertedBytes = Float32List(1 * inputSize * inputSize * 3);
+    var buffer = Float32List.view(convertedBytes.buffer);
+    int pixelIndex = 0;
+    for (var i = 0; i < inputSize; i++) {
+      for (var j = 0; j < inputSize; j++) {
+        var pixel = image.getPixel(j, i);
+        buffer[pixelIndex++] = ((img.getRed(pixel) / mean) - 1) / std;
+        buffer[pixelIndex++] = ((img.getGreen(pixel) / mean) - 1) / std;
+        buffer[pixelIndex++] = ((img.getBlue(pixel) / mean) - 1) / std;
+      }
+    }
+    return convertedBytes.buffer.asUint8List();
   }
 
   Future<void> takePicture() async {
@@ -80,151 +92,96 @@ class HomePageController extends GetxController
     }
     isBusy = true;
 
+    // double maxZoom = await controller.getMaxZoomLevel();
+    // double minZoom = await controller.getMinZoomLevel();
+
+    // double targetZoom = minZoom + (maxZoom - minZoom) / 2;
+    // await controller.setZoomLevel(targetZoom);
+
+    // Captura a imagem
+    final XFile image = await controller.takePicture();
+
     try {
-      double maxZoom = await controller.getMaxZoomLevel();
-      double minZoom = await controller.getMinZoomLevel();
+      var recognitions = await Tflite.runModelOnImage(
+        path: image.path,
+        numResults: 1,
+        threshold: 0.6,
+        imageMean: 0.0,
+        imageStd: 1.0,
+      );
 
-      double targetZoom = minZoom + (maxZoom - minZoom) / 2;
-      await controller.setZoomLevel(targetZoom);
-
-      // Aqui, capturamos a imagem.
-      final XFile image = await controller.takePicture();
-      final inputImage = InputImage.fromFilePath(image.path);
-      final RecognisedText recognisedText =
-          await textDetector.processImage(inputImage);
-
-      String ocrText = "";
-
-      for (TextBlock block in recognisedText.blocks) {
-        ocrText = block.text;
-        if (isLicensePlate(ocrText)) {
-          // Se é uma placa de licença, faça algo com o texto (ex: mostrar na tela)
-          try {
-            DateTime agora = DateTime.now();
-            String timestampFormatado =
-                DateFormat('yyyy-MM-dd HH:mm:ss').format(agora);
-            var falcon = FalconApi();
-            Map<String, dynamic> chave = {
-              "placa": ocrText,
-              "latlong": '${lat?.value.text} ${long?.value.text}',
-              "datahora": timestampFormatado,
-              "nick_usuario": 'teste',
-            };
-            final conn = await falcon.enviarVeiculo(chave);
-
-            Fluttertoast.showToast(
-                msg: "Nova placa detectada!",
-                toastLength: Toast
-                    .LENGTH_SHORT, // Defina a duração do toast. Pode ser LENGTH_SHORT (curto) ou LENGTH_LONG (longo)
-                gravity: ToastGravity
-                    .BOTTOM, // Posição na tela onde o toast deve aparecer. Pode ser TOP, BOTTOM, CENTER
-                timeInSecForIosWeb:
-                    1, // Duração em segundos para exibição em iOS e web
-                backgroundColor: Colors.green, // Cor de fundo do toast
-                textColor: Colors.white, // Cor do texto
-                fontSize: 16.0 // Tamanho do texto
-                );
-            AssetsAudioPlayer.newPlayer().open(
-              Audio("assets/sons/insercao.mp3"),
-              showNotification: true,
-            );
-            await controller.setZoomLevel(minZoom);
-            break;
-          } catch (e) {
-            Fluttertoast.showToast(
-                msg: "Erro ao inserir placa!",
-                toastLength: Toast
-                    .LENGTH_SHORT, // Defina a duração do toast. Pode ser LENGTH_SHORT (curto) ou LENGTH_LONG (longo)
-                gravity: ToastGravity
-                    .BOTTOM, // Posição na tela onde o toast deve aparecer. Pode ser TOP, BOTTOM, CENTER
-                timeInSecForIosWeb:
-                    1, // Duração em segundos para exibição em iOS e web
-                backgroundColor: Colors.red, // Cor de fundo do toast
-                textColor: Colors.white, // Cor do texto
-                fontSize: 16.0 // Tamanho do texto
-                );
-          }
-
-          // Sair do loop se uma placa de licença válida for encontrada.
-        }
-      }
-
-      // Após processar a imagem, você pode querer excluir o arquivo da imagem capturada para economizar espaço.
-      final file = File(image.path);
-      await file.delete();
+      // Processar as recognitions conforme necessário para a sua aplicação.
+      print(recognitions);
     } catch (e) {
       print(e);
-    } finally {
-      isBusy = false; // Permite que a próxima captura ocorra.
     }
   }
+}
 
-  Uint8List concatenatePlanes(List<Plane> planes) {
-    final WriteBuffer allBytes = WriteBuffer();
-    planes.forEach((plane) {
-      allBytes.putUint8List(plane.bytes);
-    });
-    return allBytes.done().buffer.asUint8List();
+Uint8List concatenatePlanes(List<Plane> planes) {
+  final WriteBuffer allBytes = WriteBuffer();
+  planes.forEach((plane) {
+    allBytes.putUint8List(plane.bytes);
+  });
+  return allBytes.done().buffer.asUint8List();
+}
+
+bool isLicensePlate(String text) {
+  RegExp plateRegExp = RegExp(
+      r"^[A-Z]{3}-\d{4}$|^[A-Z]{3}\d[A-Z]\d{2}$|^[A-Z]{3}\d{1}[A-Z]{1}\d{2}$");
+  return plateRegExp.hasMatch(text);
+}
+
+void showLicensePlate(String ocrText) {
+  print("Placa do Veículo: $ocrText");
+}
+
+Future<dynamic> envioInforma() async {
+  var falcon = FalconApi();
+  File imagefile = File(imageFileList!.first.path);
+  Uint8List imagebytes = await imagefile.readAsBytes();
+  String base64string = base64.encode(imagebytes);
+  Map<String, dynamic> chave = {
+    "lat": lat?.value.text,
+    "long": long?.value.text,
+    "imagem": base64string,
+    "timestamp": DateTime.now().millisecondsSinceEpoch,
+  };
+  print(chave);
+  final conn = await falcon.enviarVeiculo(chave);
+  print(conn);
+}
+
+Rx<TextEditingController>? lat = TextEditingController().obs;
+Rx<TextEditingController>? long = TextEditingController().obs;
+List<XFile>? imageFileList = [];
+List<String>? imageFileEnvio = [];
+final ImagePicker _picker = ImagePicker();
+
+Future<Position> _determinePosition() async {
+  bool serviceEnabled;
+  LocationPermission permission;
+
+  serviceEnabled = await Geolocator.isLocationServiceEnabled();
+  if (!serviceEnabled) {
+    return Future.error('O serviço de localização está desabilitado.');
   }
 
-  bool isLicensePlate(String text) {
-    RegExp plateRegExp = RegExp(
-        r"^[A-Z]{3}-\d{4}$|^[A-Z]{3}\d[A-Z]\d{2}$|^[A-Z]{3}\d{1}[A-Z]{1}\d{2}$");
-    return plateRegExp.hasMatch(text);
-  }
-
-  void showLicensePlate(String ocrText) {
-    print("Placa do Veículo: $ocrText");
-  }
-
-  Future<dynamic> envioInforma() async {
-    var falcon = FalconApi();
-    File imagefile = File(imageFileList!.first.path);
-    Uint8List imagebytes = await imagefile.readAsBytes();
-    String base64string = base64.encode(imagebytes);
-    Map<String, dynamic> chave = {
-      "lat": lat?.value.text,
-      "long": long?.value.text,
-      "imagem": base64string,
-      "timestamp": DateTime.now().millisecondsSinceEpoch,
-    };
-    print(chave);
-    final conn = await falcon.enviarVeiculo(chave);
-    print(conn);
-  }
-
-  Rx<TextEditingController>? lat = TextEditingController().obs;
-  Rx<TextEditingController>? long = TextEditingController().obs;
-  List<XFile>? imageFileList = [];
-  List<String>? imageFileEnvio = [];
-  final ImagePicker _picker = ImagePicker();
-
-  Future<Position> _determinePosition() async {
-    bool serviceEnabled;
-    LocationPermission permission;
-
-    serviceEnabled = await Geolocator.isLocationServiceEnabled();
-    if (!serviceEnabled) {
-      return Future.error('O serviço de localização está desabilitado.');
-    }
-
-    permission = await Geolocator.checkPermission();
+  permission = await Geolocator.checkPermission();
+  if (permission == LocationPermission.denied) {
+    permission = await Geolocator.requestPermission();
     if (permission == LocationPermission.denied) {
-      permission = await Geolocator.requestPermission();
-      if (permission == LocationPermission.denied) {
-        return Future.error('A localização não foi permitida');
-      }
+      return Future.error('A localização não foi permitida');
     }
-
-    if (permission == LocationPermission.deniedForever) {
-      return Future.error(
-          'Location permissions are permanently denied, we cannot request permissions.');
-    }
-    var current = await Geolocator.getCurrentPosition();
-    lat?.value.text = current.latitude.toString();
-    long?.value.text = current.longitude.toString();
-    Get.forceAppUpdate();
-
-    return await Geolocator.getCurrentPosition();
   }
+
+  if (permission == LocationPermission.deniedForever) {
+    return Future.error(
+        'Location permissions are permanently denied, we cannot request permissions.');
+  }
+  var current = await Geolocator.getCurrentPosition();
+  lat?.value.text = current.latitude.toString();
+  long?.value.text = current.longitude.toString();
+
+  return await Geolocator.getCurrentPosition();
 }

@@ -47,7 +47,9 @@ dependencies:
   fluttertoast: ^8.2.2
   shared_preferences: ^2.2.2
   assets_audio_player: ^3.0.6
-   
+  tflite_flutter: ^0.10.3
+  tflite_v2: ^1.0.0
+  image: ^3.0.1
 
 dev_dependencies:
   flutter_test:
