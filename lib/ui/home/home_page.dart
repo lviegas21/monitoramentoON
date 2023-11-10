@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
 import '../../controller/home_page_controller.dart';
+import 'components/orvelay_components.dart';
 import 'components/text_field_components.dart';
 
 class HomePage extends StatelessWidget {
@@ -110,9 +111,37 @@ class HomePage extends StatelessWidget {
                             width: 4.0, // Largura da borda
                           ),
                         ),
-                        child: AspectRatio(
-                          aspectRatio: controller.controller.value.aspectRatio,
-                          child: CameraPreview(controller.controller),
+                        child: Expanded(
+                          child: Stack(
+                            children: <Widget>[
+                              Container(
+                                decoration: BoxDecoration(
+                                  border: Border.all(
+                                    color: Colors.indigo,
+                                    width: 4.0,
+                                  ),
+                                ),
+                                child: AspectRatio(
+                                  aspectRatio:
+                                      controller.controller.value.aspectRatio,
+                                  child: CameraPreview(controller.controller),
+                                ),
+                              ),
+                              // Adicione o OverlayWidget aqui
+                              OverlayWidget(
+                                recognitions: controller.recognition
+                                    .value, // Dados de detecção do YOLO
+                                relativeWidth: MediaQuery.of(context)
+                                    .size
+                                    .width, // Largura da tela
+                                relativeHeight: MediaQuery.of(context)
+                                        .size
+                                        .width /
+                                    controller.controller.value
+                                        .aspectRatio, // Altura baseada na proporção da tela
+                              ),
+                            ],
+                          ),
                         ),
                       ),
                     ),

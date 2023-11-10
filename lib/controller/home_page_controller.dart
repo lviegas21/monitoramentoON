@@ -15,6 +15,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart';
 
 import 'package:image/image.dart' as img;
+import 'package:projeto_cicero/ui/home/components/orvelay_components.dart';
 import '../infra/falcon_api.dart';
 import '../models/falcon_model.dart';
 import 'package:tflite_flutter/tflite_flutter.dart' as tfl;
@@ -26,6 +27,7 @@ class HomePageController extends GetxController
   @override
   void onInit() async {
     await initializeCamera();
+    await loadmodel();
     await _determinePosition();
 
     super.onInit();
@@ -33,8 +35,12 @@ class HomePageController extends GetxController
 
   loadmodel() async {
     await Tflite.loadModel(
-        model: 'assets/model.tflite', labels: 'assets/labels.txt');
+      model: "assets/model_unquant.tflite",
+      labels: "assets/labels.txt",
+    );
   }
+
+  RxList<Recognition> recognition = <Recognition>[].obs;
 
   Interpreter? interpreter;
 
@@ -53,9 +59,6 @@ class HomePageController extends GetxController
 
   Future<void> initializeCamera() async {
     final cameras = await availableCameras();
-    loadmodel().then((value) {
-      print('deu certo');
-    });
 
     controller = CameraController(cameras[0], ResolutionPreset.medium);
     await controller.initialize();
@@ -68,22 +71,6 @@ class HomePageController extends GetxController
         takePicture();
       }
     });
-  }
-
-  Uint8List imageToByteListFloat32(
-      img.Image image, int inputSize, double mean, double std) {
-    var convertedBytes = Float32List(1 * inputSize * inputSize * 3);
-    var buffer = Float32List.view(convertedBytes.buffer);
-    int pixelIndex = 0;
-    for (var i = 0; i < inputSize; i++) {
-      for (var j = 0; j < inputSize; j++) {
-        var pixel = image.getPixel(j, i);
-        buffer[pixelIndex++] = ((img.getRed(pixel) / mean) - 1) / std;
-        buffer[pixelIndex++] = ((img.getGreen(pixel) / mean) - 1) / std;
-        buffer[pixelIndex++] = ((img.getBlue(pixel) / mean) - 1) / std;
-      }
-    }
-    return convertedBytes.buffer.asUint8List();
   }
 
   Future<void> takePicture() async {
@@ -99,21 +86,73 @@ class HomePageController extends GetxController
     // await controller.setZoomLevel(targetZoom);
 
     // Captura a imagem
-    final XFile image = await controller.takePicture();
 
     try {
+      // Suponha que você já tenha uma imagem capturada na variável 'image'.
+      final XFile image = await controller.takePicture();
+
+      // Execute a detecção YOLO na imagem para encontrar a placa de licença.
       var recognitions = await Tflite.runModelOnImage(
         path: image.path,
-        numResults: 1,
+        numResults: 2,
         threshold: 0.6,
-        imageMean: 0.0,
-        imageStd: 1.0,
+        imageMean: 127.5,
+        imageStd: 127.5,
       );
 
-      // Processar as recognitions conforme necessário para a sua aplicação.
-      print(recognitions);
+      if (recognitions!.isNotEmpty) {
+        // Suponha que a primeira detecção é a placa de licença.
+        var recognition = recognitions.first;
+        print(recognition);
+        FalconApi falconApi = FalconApi();
+        // Aqui você extrairia as coordenadas da detecção para recortar a imagem.
+        // O código a seguir é apenas um exemplo e precisa ser ajustado.
+
+        // Execute o OCR na imagem recortada.
+        final inputImage = InputImage.fromFilePath(image.path);
+        final RecognisedText recognisedText =
+            await textDetector.processImage(inputImage);
+
+        String ocrText = "";
+        for (TextBlock block in recognisedText.blocks) {
+          ocrText = block.text;
+          if (isLicensePlate(ocrText)) {
+            DateTime agora = DateTime.now();
+            String timestampFormatado =
+                DateFormat('yyyy-MM-dd HH:mm:ss').format(agora);
+            var falcon = FalconApi();
+            Map<String, dynamic> chave = {
+              "placa": ocrText,
+              "latlong": '${lat?.value.text} ${long?.value.text}',
+              "datahora": timestampFormatado,
+              "nick_usuario": 'teste',
+            };
+            await falconApi.enviarVeiculo(chave);
+            Fluttertoast.showToast(
+                msg: "Nova placa detectada!",
+                toastLength: Toast
+                    .LENGTH_SHORT, // Defina a duração do toast. Pode ser LENGTH_SHORT (curto) ou LENGTH_LONG (longo)
+                gravity: ToastGravity
+                    .BOTTOM, // Posição na tela onde o toast deve aparecer. Pode ser TOP, BOTTOM, CENTER
+                timeInSecForIosWeb:
+                    1, // Duração em segundos para exibição em iOS e web
+                backgroundColor: Colors.green, // Cor de fundo do toast
+                textColor: Colors.white, // Cor do texto
+                fontSize: 16.0 // Tamanho do texto
+                );
+            AssetsAudioPlayer.newPlayer().open(
+              Audio("assets/sons/insercao.mp3"),
+              showNotification: true,
+            );
+          }
+        }
+
+        // Verifique se o texto é uma placa de licença.
+      }
     } catch (e) {
       print(e);
+    } finally {
+      isBusy = false; // Permite que a próxima captura ocorra.
     }
   }
 }
