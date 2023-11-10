@@ -1,12 +1,9 @@
-import 'dart:io';
-
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
 import '../../controller/home_page_controller.dart';
 import 'components/orvelay_components.dart';
-import 'components/text_field_components.dart';
 
 class HomePage extends StatelessWidget {
   Widget build(BuildContext context) {

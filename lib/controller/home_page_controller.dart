@@ -15,7 +15,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart';
 
 import 'package:image/image.dart' as img;
-import 'package:projeto_cicero/ui/home/components/orvelay_components.dart';
+import '../ui/home/components/orvelay_components.dart';
 import '../infra/falcon_api.dart';
 import '../models/falcon_model.dart';
 import 'package:tflite_flutter/tflite_flutter.dart' as tfl;

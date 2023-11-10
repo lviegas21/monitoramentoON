@@ -4,7 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'package:get/get.dart';
-import 'package:projeto_cicero/ui/splash/splash.dart';
+import 'ui/splash/splash.dart';
 
 import 'controller/bind/home_page_bidding.dart';
 import 'controller/bind/splash_page_bidding.dart';
