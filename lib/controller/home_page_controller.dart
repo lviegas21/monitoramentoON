@@ -42,8 +42,6 @@ class HomePageController extends GetxController
 
   RxList<Recognition> recognition = <Recognition>[].obs;
 
-  Interpreter? interpreter;
-
   RxBool isWifi = false.obs;
 
   bool isBusy = false;
