@@ -1,64 +1,53 @@
 import 'package:flutter/material.dart';
+import 'package:google_ml_kit/google_ml_kit.dart';
 
-class OverlayWidget extends StatelessWidget {
-  final List<Recognition> recognitions; // Suas detecções do YOLO
-  final double relativeWidth; // Largura relativa da visualização da câmera
-  final double relativeHeight; // Altura relativa da visualização da câmera
+class BoundingBoxPainter extends CustomPainter {
+  final List<TextBlock> blocks;
+  final Size previewSize;
+  final Size screenSize;
 
-  OverlayWidget({
-    required this.recognitions,
-    required this.relativeWidth,
-    required this.relativeHeight,
+  BoundingBoxPainter({
+    required this.blocks,
+    required this.previewSize,
+    required this.screenSize,
   });
 
   @override
-  Widget build(BuildContext context) {
-    return Stack(
-      fit: StackFit.expand,
-      children: recognitions.map((recognition) {
-        // Converta as coordenadas relativas para o tamanho da tela
-        final position = recognition.position;
-        final left = position.left * relativeWidth;
-        final top = position.top * relativeHeight;
-        final width = position.width * relativeWidth;
-        final height = position.height * relativeHeight;
+  void paint(Canvas canvas, Size size) {
+    // A proporção da visualização da câmera pode ser diferente da imagem processada.
+    // Portanto, calcule a escala com base na largura e na altura separadamente.
+    final double scaleX = screenSize.width / previewSize.width;
+    final double scaleY = screenSize.height / previewSize.height;
 
-        return Positioned(
-          left: left,
-          top: top,
-          child: Container(
-            width: width,
-            height: height,
-            decoration: BoxDecoration(
-              border: Border.all(
-                color: Colors.red, // Cor da borda
-                width: 3, // Espessura da borda
-              ),
-            ),
-            child: Text(
-              "${recognition.label} ${(recognition.confidence * 100).toStringAsFixed(0)}%", // Label e confiança
-              style: TextStyle(
-                background: Paint()..color = Colors.blue,
-                color: Colors.white,
-                fontSize: 15,
-              ),
-            ),
-          ),
-        );
-      }).toList(),
-    );
+    // Se a imagem foi cortada (por exemplo, para manter a proporção), você pode precisar ajustar o offset.
+    // Calcula o offset baseado na diferença entre a altura da visualização da câmera e a altura da imagem processada pelo modelo.
+    final double offsetY = (previewSize.height -
+            screenSize.height * (previewSize.width / screenSize.width)) /
+        2;
+
+    for (var block in blocks) {
+      final Rect rect = block.rect;
+      final double left = rect.left * scaleX;
+      final double top =
+          (rect.top * scaleY) - offsetY; // Ajuste para o offsetY se necessário.
+      final double right = rect.right * scaleX;
+      final double bottom = (rect.bottom * scaleY) -
+          offsetY; // Ajuste para o offsetY se necessário.
+
+      final Paint paint = Paint()
+        ..color = Colors.red
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2.0;
+
+      canvas.drawRect(
+        Rect.fromLTRB(left, top, right, bottom),
+        paint,
+      );
+    }
   }
-}
 
-// Supondo que você tenha uma classe para 'Recognition' que contém os dados de detecção
-class Recognition {
-  String label;
-  double confidence;
-  Rect position;
-
-  Recognition({
-    required this.label,
-    required this.confidence,
-    required this.position,
-  });
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) {
+    return true;
+  }
 }
