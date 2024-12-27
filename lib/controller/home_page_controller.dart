@@ -4,7 +4,6 @@ import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 
-import 'package:assets_audio_player/assets_audio_player.dart';
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -14,17 +13,39 @@ import 'package:get/get.dart';
 import 'package:google_ml_kit/google_ml_kit.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart';
-
 import 'package:image/image.dart' as img;
-import '../ui/home/components/orvelay_components.dart';
-import '../infra/falcon_api.dart';
-import '../models/falcon_model.dart';
 import 'package:tflite_flutter/tflite_flutter.dart' as tfl;
-import 'package:tflite_flutter/tflite_flutter.dart';
-import 'package:tflite_v2/tflite_v2.dart';
+import 'package:path_provider/path_provider.dart';
+
+import '../ui/home/components/orvelay_components.dart';
+import '../provider/falcon.dart';
+import '../models/falcon_model.dart';
 
 class HomePageController extends GetxController
     with GetSingleTickerProviderStateMixin {
+  final RxList<RecognizedText> textBoxs = <RecognizedText>[].obs;
+  final RxBool isWifi = false.obs;
+  final RxBool isButton = false.obs;
+  final RxBool isProcessingImage = false.obs;
+  final RxBool isCameraInitialized = false.obs;
+  final Rx<TextEditingController> lat = TextEditingController().obs;
+  final Rx<TextEditingController> long = TextEditingController().obs;
+
+  bool isBusy = false;
+  late Timer _timer;
+  double _currentZoom = 1.0;
+  late CameraController controller;
+  final textRecognizer = TextRecognizer();
+  final Falcon falcon = Falcon();
+  List<XFile>? imageFileList = [];
+  Position? currentPosition;
+  tfl.Interpreter? _interpreter;
+
+  // Controle de monitoramento
+  RxBool isMonitoring = false.obs;
+  // Set para armazenar placas já detectadas
+  final Set<String> detectedPlates = {};
+
   @override
   void onInit() {
     super.onInit();
@@ -33,199 +54,295 @@ class HomePageController extends GetxController
     _determinePosition();
   }
 
-  Future<void> loadModel() async {
-    await Tflite.loadModel(
-      model: "assets/model_unquant.tflite",
-      labels: "assets/labels.txt",
-    );
+  @override
+  void onClose() {
+    _timer.cancel();
+    controller.dispose();
+    textRecognizer.close();
+    _interpreter?.close();
+    super.onClose();
   }
 
-  RxList<TextBlock> textBoxs = <TextBlock>[].obs;
+  Future<void> loadModel() async {
+    try {
+      final modelFile = await _getModel();
+      _interpreter = await tfl.Interpreter.fromFile(modelFile);
+      print('Modelo carregado com sucesso');
+    } catch (e) {
+      print('Erro ao carregar modelo: $e');
+    }
+  }
 
-  RxBool isWifi = false.obs;
+  Future<File> _getModel() async {
+    final appDir = await getApplicationDocumentsDirectory();
+    final modelPath = '${appDir.path}/model_unquant.tflite';
+    final modelFile = File(modelPath);
 
-  bool isBusy = false;
-  late Timer _timer;
-  double _currentZoom = 1.0;
+    if (!await modelFile.exists()) {
+      final byteData = await rootBundle.load('assets/model_unquant.tflite');
+      await modelFile.writeAsBytes(byteData.buffer.asUint8List());
+    }
+    return modelFile;
+  }
 
-  RxBool isButton = false.obs;
-  RxBool isProcessingImage = false.obs;
-
-  late CameraController controller;
-
-  RxBool isCameraInitialized = false.obs;
-  TextDetector textDetector = GoogleMlKit.vision.textDetector();
-  FalconApi falconApi = FalconApi();
-
-  Future<void> initializeCamera() async {
-    final cameras = await availableCameras();
-
-    controller = CameraController(cameras[0], ResolutionPreset.medium);
-    await controller.initialize();
-    String filePath =
-        'assets/sons/insercao.mp3'; // Substitua pelo caminho real do seu arquivo
-
-    isCameraInitialized.value = true;
-    _timer = Timer.periodic(Duration(seconds: 10), (Timer t) {
-      if (!isBusy) {
+  Future<void> chamadaInicio() async {
+    _timer = Timer.periodic(const Duration(seconds: 10), (Timer t) {
+      if (!isBusy && isMonitoring.value) {
         takePicture();
       }
     });
   }
 
-  Future<void> takePicture() async {
-    if (!controller.value.isInitialized || isBusy || isProcessingImage.value) {
-      return;
-    }
-    isBusy = true;
-    isProcessingImage.value = true;
-
+  Future<void> initializeCamera() async {
     try {
-      final XFile image = await controller.takePicture();
-      await processImage(image);
+      final cameras = await availableCameras();
+      controller = CameraController(cameras[0], ResolutionPreset.medium, enableAudio: false);
+      await controller.initialize();
+      await controller.setFlashMode(FlashMode.off); // Desativa o flash permanentemente
+      isCameraInitialized.value = true;
     } catch (e) {
-      print(e);
-    } finally {
-      isBusy = false;
-      isProcessingImage.value = false;
+      print('Erro ao inicializar câmera: $e');
     }
   }
 
-  Future<void> notificarUsuario(bool isMensagem) async {
-    if (isMensagem == true) {
-      Fluttertoast.showToast(
-          msg: "Nova placa detectada!",
-          toastLength: Toast
-              .LENGTH_SHORT, // Defina a duração do toast. Pode ser LENGTH_SHORT (curto) ou LENGTH_LONG (longo)
-          gravity: ToastGravity
-              .BOTTOM, // Posição na tela onde o toast deve aparecer. Pode ser TOP, BOTTOM, CENTER
-          timeInSecForIosWeb:
-              1, // Duração em segundos para exibição em iOS e web
-          backgroundColor: Colors.green, // Cor de fundo do toast
-          textColor: Colors.white, // Cor do texto
-          fontSize: 16.0 // Tamanho do texto
-          );
-      AssetsAudioPlayer.newPlayer().open(
-        Audio("assets/sons/insercao.mp3"),
-        showNotification: true,
-      );
-    } else {}
-  }
-
-  Future<void> processImage(XFile image) async {
-    var recognitions = await Tflite.runModelOnImage(
-      path: image.path,
-      numResults: 2,
-      threshold: 0.6,
-      imageMean: 127.5,
-      imageStd: 127.5,
-    );
-
-    if (recognitions!.isNotEmpty) {
-      var recognition = recognitions.first;
-      print(recognition);
-      img.Image image1 = img.decodeImage(File(image.path).readAsBytesSync())!;
-      int width = image1.width;
-      int height = image1.height;
-      int dimension = min(224, 224);
-      img.Image resized = img.copyResizeCropSquare(image1, dimension);
-
-      final inputImage = InputImage.fromFilePath(image.path);
-      final RecognisedText recognisedText =
-          await textDetector.processImage(inputImage);
-
-      for (TextBlock block in recognisedText.blocks) {
-        print("Blocos de texto detectados: ${block.text}");
-        if (isLicensePlate(block.text)) {
-          try {
-            textBoxs.clear();
-            textBoxs.add(block);
-            DateTime agora = DateTime.now();
-            String timestampFormatado =
-                DateFormat('yyyy-MM-dd HH:mm:ss').format(agora);
-            var falcon = FalconApi();
-            Map<String, dynamic> chave = {
-              "placa": block.text,
-              "latlong": '${lat?.value.text} ${long?.value.text}',
-              "datahora": timestampFormatado,
-              "nick_usuario": 'teste',
-            };
-            await falconApi.enviarVeiculo(chave);
-            await notificarUsuario(true);
-          } catch (e) {}
-        }
-      }
-      print(textBoxs);
-      // Atualize a interface do usuário após o processamento
-      textBoxs.refresh();
-    }
-  }
-
-  Uint8List concatenatePlanes(List<Plane> planes) {
-    final WriteBuffer allBytes = WriteBuffer();
-    planes.forEach((plane) {
-      allBytes.putUint8List(plane.bytes);
-    });
-    return allBytes.done().buffer.asUint8List();
-  }
-
-  bool isLicensePlate(String text) {
-    RegExp plateRegExp = RegExp(
-        r"^[A-Z]{3}-\d{4}$|^[A-Z]{3}\d[A-Z]\d{2}$|^[A-Z]{3}\d{1}[A-Z]{1}\d{2}$");
-    return plateRegExp.hasMatch(text);
-  }
-
-  void showLicensePlate(String ocrText) {
-    print("Placa do Veículo: $ocrText");
-  }
-
-  Future<dynamic> envioInforma() async {
-    var falcon = FalconApi();
-    File imagefile = File(imageFileList!.first.path);
-    Uint8List imagebytes = await imagefile.readAsBytes();
-    String base64string = base64.encode(imagebytes);
-    Map<String, dynamic> chave = {
-      "lat": lat?.value.text,
-      "long": long?.value.text,
-      "imagem": base64string,
-      "timestamp": DateTime.now().millisecondsSinceEpoch,
-    };
-    print(chave);
-    final conn = await falcon.enviarVeiculo(chave);
-    print(conn);
-  }
-
-  Rx<TextEditingController>? lat = TextEditingController().obs;
-  Rx<TextEditingController>? long = TextEditingController().obs;
-  List<XFile>? imageFileList = [];
-  List<String>? imageFileEnvio = [];
-  final ImagePicker _picker = ImagePicker();
-
-  Future<Position> _determinePosition() async {
+  Future<void> _determinePosition() async {
     bool serviceEnabled;
     LocationPermission permission;
 
     serviceEnabled = await Geolocator.isLocationServiceEnabled();
     if (!serviceEnabled) {
-      return Future.error('O serviço de localização está desabilitado.');
+      return Future.error('Serviços de localização estão desabilitados.');
     }
 
     permission = await Geolocator.checkPermission();
     if (permission == LocationPermission.denied) {
       permission = await Geolocator.requestPermission();
       if (permission == LocationPermission.denied) {
-        return Future.error('A localização não foi permitida');
+        return Future.error('Permissões de localização foram negadas');
       }
     }
 
     if (permission == LocationPermission.deniedForever) {
       return Future.error(
-          'Location permissions are permanently denied, we cannot request permissions.');
+          'Permissões de localização foram permanentemente negadas');
     }
-    var current = await Geolocator.getCurrentPosition();
-    lat?.value.text = current.latitude.toString();
-    long?.value.text = current.longitude.toString();
 
-    return await Geolocator.getCurrentPosition();
+    currentPosition = await Geolocator.getCurrentPosition();
+    lat.value.text = currentPosition?.latitude.toString() ?? '';
+    long.value.text = currentPosition?.longitude.toString() ?? '';
+  }
+
+  Future<void> takePicture() async {
+    if (!controller.value.isInitialized) {
+      return;
+    }
+
+    if (isBusy) {
+      return;
+    }
+
+    try {
+      isBusy = true;
+      final image = await controller.takePicture();
+      await processImage(image);
+    } catch (e) {
+      print('Erro ao tirar foto: $e');
+    } finally {
+      isBusy = false;
+    }
+  }
+
+  Future<void> notificarUsuario(bool sucesso, {String? mensagem}) async {
+    if (sucesso) {
+      Fluttertoast.showToast(
+          msg: mensagem ?? "Nova placa detectada!",
+          toastLength: Toast.LENGTH_SHORT,
+          gravity: ToastGravity.BOTTOM,
+          timeInSecForIosWeb: 1,
+          backgroundColor: Colors.green,
+          textColor: Colors.white,
+          fontSize: 16.0);
+    } else {
+      Fluttertoast.showToast(
+          msg: mensagem ?? "Erro ao processar placa",
+          toastLength: Toast.LENGTH_SHORT,
+          gravity: ToastGravity.BOTTOM,
+          timeInSecForIosWeb: 1,
+          backgroundColor: Colors.red,
+          textColor: Colors.white,
+          fontSize: 16.0);
+    }
+  }
+
+  Future<List<dynamic>> runModelInference(String imagePath) async {
+    if (_interpreter == null) {
+      print('Interpreter não inicializado');
+      return [];
+    }
+
+    try {
+      final imageData = File(imagePath).readAsBytesSync();
+      final image = img.decodeImage(imageData);
+      if (image == null) return [];
+
+      final resizedImage = img.copyResize(image, width: 224, height: 224);
+      var input = Float32List(1 * 224 * 224 * 3);
+      var pixel = 0;
+
+      for (var y = 0; y < 224; y++) {
+        for (var x = 0; x < 224; x++) {
+          final p = resizedImage.getPixel(x, y);
+
+          // Normaliza os valores RGB para o intervalo [-1, 1]
+          input[pixel] = (p.r.toDouble() - 127.5) / 127.5;
+          input[pixel + 1] = (p.g.toDouble() - 127.5) / 127.5;
+          input[pixel + 2] = (p.b.toDouble() - 127.5) / 127.5;
+          pixel += 3;
+        }
+      }
+
+      var output = List.filled(1 * 2, 0).reshape([1, 2]);
+      _interpreter!.run(input.reshape([1, 224, 224, 3]), output);
+
+      // Aumentando o threshold para reduzir falsos positivos
+      final confidence = output[0][1];
+      if (confidence > 0.85) {
+        // Threshold mais alto
+        print('Detecção: Placa com confiança: ${confidence * 100}%');
+        return [
+          {'confidence': confidence, 'index': 1, 'label': 'Placa'}
+        ];
+      }
+
+      return [];
+    } catch (e) {
+      print('Erro ao executar inferência: $e');
+      return [];
+    }
+  }
+
+  Future<RecognizedText?> detectText(String imagePath) async {
+    try {
+      final inputImage = InputImage.fromFilePath(imagePath);
+      final recognizedText = await textRecognizer.processImage(inputImage);
+      return recognizedText;
+    } catch (e) {
+      print('Erro ao detectar texto: $e');
+      return null;
+    }
+  }
+
+  Future<bool> isLicensePlate(String imagePath) async {
+    try {
+      final results = await runModelInference(imagePath);
+      if (results.isEmpty) return false;
+
+      final confidence = results[0]['confidence'] as double;
+      // Adicionando verificações adicionais
+      if (confidence > 0.85) {
+        // Verifica se há texto na imagem que se parece com uma placa
+        final recognizedText = await detectText(imagePath);
+        if (recognizedText != null) {
+          // Verifica se o texto segue o padrão de placa brasileira
+          final platePattern = RegExp(r'^[A-Z]{3}[0-9][0-9A-Z][0-9]{2}$');
+          final hasPlateFormat = recognizedText.blocks.any((block) =>
+              block.text.replaceAll(RegExp(r'[^A-Z0-9]'), '').length >= 7 &&
+              platePattern
+                  .hasMatch(block.text.replaceAll(RegExp(r'[^A-Z0-9]'), '')));
+
+          if (hasPlateFormat) {
+            print('Placa detectada com formato válido');
+            return true;
+          }
+        }
+      }
+
+      return false;
+    } catch (e) {
+      print('Erro ao verificar placa: $e');
+      return false;
+    }
+  }
+
+  void toggleMonitoring() {
+    isMonitoring.value = !isMonitoring.value;
+    if (isMonitoring.value) {
+      Fluttertoast.showToast(
+          msg: "Monitoramento iniciado",
+          toastLength: Toast.LENGTH_SHORT,
+          gravity: ToastGravity.CENTER,
+          backgroundColor: Colors.green,
+          textColor: Colors.white,
+          fontSize: 16.0);
+    } else {
+      detectedPlates.clear(); // Limpa placas detectadas ao parar
+      Fluttertoast.showToast(
+          msg: "Monitoramento parado",
+          toastLength: Toast.LENGTH_SHORT,
+          gravity: ToastGravity.CENTER,
+          backgroundColor: Colors.red,
+          textColor: Colors.white,
+          fontSize: 16.0);
+    }
+  }
+
+  Future<void> processImage(XFile image) async {
+    // Se não estiver monitorando, ignora a imagem
+    if (!isMonitoring.value) return;
+
+    try {
+      if (await isLicensePlate(image.path)) {
+        final plateText = await getPlateText(image.path);
+
+        // Verifica se a placa já foi detectada
+        if (detectedPlates.contains(plateText)) {
+          await notificarUsuario(false,
+              mensagem: "Placa $plateText já foi registrada");
+          return;
+        }
+
+        final timestamp =
+            DateFormat('yyyy-MM-dd HH:mm:ss').format(DateTime.now());
+        File imageFile = File(image.path);
+        Uint8List imageBytes = await imageFile.readAsBytes();
+        String base64Image = base64.encode(imageBytes);
+
+        Map<String, dynamic> dados = {
+          "placa": plateText,
+          "imagem": base64Image,
+          "lat": currentPosition?.latitude ?? 0.0,
+          "long": currentPosition?.longitude ?? 0.0,
+          "timestamp": timestamp,
+          "confianca":
+              (await runModelInference(image.path))[0]['confidence'] ?? 0.0,
+        };
+
+        await falcon.conection(dados);
+        // Adiciona a placa ao set de placas detectadas
+        detectedPlates.add(plateText);
+        await notificarUsuario(true);
+      }
+    } catch (e) {
+      print('Erro ao processar imagem: $e');
+      await notificarUsuario(false);
+    }
+  }
+
+  Future<String> getPlateText(String imagePath) async {
+    try {
+      final recognizedText = await detectText(imagePath);
+      if (recognizedText != null) {
+        final platePattern = RegExp(r'^[A-Z]{3}[0-9][0-9A-Z][0-9]{2}$');
+        final plateText = recognizedText.blocks
+            .firstWhere((block) => platePattern
+                .hasMatch(block.text.replaceAll(RegExp(r'[^A-Z0-9]'), '')))
+            .text;
+        return plateText;
+      }
+      return '';
+    } catch (e) {
+      print('Erro ao obter texto da placa: $e');
+      return '';
+    }
   }
 }

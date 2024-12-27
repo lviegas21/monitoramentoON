@@ -1,53 +1,84 @@
 import 'package:flutter/material.dart';
+import 'dart:math' as math;
 import 'package:google_ml_kit/google_ml_kit.dart';
 
 class BoundingBoxPainter extends CustomPainter {
-  final List<TextBlock> blocks;
   final Size previewSize;
   final Size screenSize;
+  final List<RecognizedText> blocks;
+  final bool isPlateDetected;
 
-  BoundingBoxPainter({
-    required this.blocks,
-    required this.previewSize,
-    required this.screenSize,
-  });
+  BoundingBoxPainter(this.previewSize, this.screenSize, this.blocks, {this.isPlateDetected = false});
 
   @override
   void paint(Canvas canvas, Size size) {
-    // A proporção da visualização da câmera pode ser diferente da imagem processada.
-    // Portanto, calcule a escala com base na largura e na altura separadamente.
+    final Paint paint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 3.0
+      ..color = isPlateDetected ? Colors.green : Colors.red;
+
+    final TextStyle textStyle = TextStyle(
+      color: Colors.white,
+      fontSize: 16,
+      fontWeight: FontWeight.bold,
+      backgroundColor: Colors.black54,
+    );
+
     final double scaleX = screenSize.width / previewSize.width;
     final double scaleY = screenSize.height / previewSize.height;
+    final double scale = math.min(scaleX, scaleY);
 
-    // Se a imagem foi cortada (por exemplo, para manter a proporção), você pode precisar ajustar o offset.
-    // Calcula o offset baseado na diferença entre a altura da visualização da câmera e a altura da imagem processada pelo modelo.
-    final double offsetY = (previewSize.height -
-            screenSize.height * (previewSize.width / screenSize.width)) /
-        2;
+    final double offsetX = (screenSize.width - previewSize.width * scale) / 2;
+    final double offsetY = (screenSize.height - previewSize.height * scale) / 2;
 
-    for (var block in blocks) {
-      final Rect rect = block.rect;
-      final double left = rect.left * scaleX;
-      final double top =
-          (rect.top * scaleY) - offsetY; // Ajuste para o offsetY se necessário.
-      final double right = rect.right * scaleX;
-      final double bottom = (rect.bottom * scaleY) -
-          offsetY; // Ajuste para o offsetY se necessário.
+    for (var recognizedText in blocks) {
+      for (var block in recognizedText.blocks) {
+        final rect = block.boundingBox;
+        if (rect == null) continue;
+        
+        // Ajusta as coordenadas do retângulo para a escala da tela
+        final Rect adjustedRect = Rect.fromLTRB(
+          offsetX + rect.left * scale,
+          offsetY + rect.top * scale,
+          offsetX + rect.right * scale,
+          offsetY + rect.bottom * scale,
+        );
 
-      final Paint paint = Paint()
-        ..color = Colors.red
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 2.0;
+        // Desenha o retângulo
+        canvas.drawRect(adjustedRect, paint);
 
-      canvas.drawRect(
-        Rect.fromLTRB(left, top, right, bottom),
-        paint,
-      );
+        // Se houver texto da placa, desenha-o acima do retângulo
+        if (block.text.isNotEmpty) {
+          final textSpan = TextSpan(
+            text: block.text,
+            style: textStyle,
+          );
+          final textPainter = TextPainter(
+            text: textSpan,
+            textDirection: TextDirection.ltr,
+          );
+          textPainter.layout();
+          
+          // Posiciona o texto acima do retângulo com fundo preto semitransparente
+          final textX = adjustedRect.left;
+          final textY = adjustedRect.top - textPainter.height - 5;
+          
+          // Desenha o fundo do texto
+          final textBackground = Rect.fromLTWH(
+            textX - 4,
+            textY - 4,
+            textPainter.width + 8,
+            textPainter.height + 8,
+          );
+          canvas.drawRect(textBackground, Paint()..color = Colors.black54);
+          
+          // Desenha o texto
+          textPainter.paint(canvas, Offset(textX, textY));
+        }
+      }
     }
   }
 
   @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) {
-    return true;
-  }
+  bool shouldRepaint(CustomPainter oldDelegate) => true;
 }

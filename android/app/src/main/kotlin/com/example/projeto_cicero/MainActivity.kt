@@ -1,4 +1,4 @@
-package com.example.projeto_cicero
+package com.example.monitoramentoON
 
 import io.flutter.embedding.android.FlutterActivity
 

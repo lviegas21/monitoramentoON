@@ -54,11 +54,12 @@ class HomePage extends StatelessWidget {
                           ],
                         ),
                         child: ElevatedButton.icon(
-                          onPressed: () {
+                          onPressed: () async {
                             controller.isButton.value = true;
+                            await controller.chamadaInicio();
                           },
                           style: ElevatedButton.styleFrom(
-                            primary: Colors.blue,
+                            backgroundColor: Colors.blue,
                             padding: EdgeInsets.symmetric(
                                 horizontal: 24, vertical: 16),
                             shape: RoundedRectangleBorder(
@@ -99,39 +100,69 @@ class HomePage extends StatelessWidget {
                 ),
               ),
             )
-          : Center(
-              child: Column(
-                children: <Widget>[
-                  Expanded(
-                    // Usar Expanded para preencher toda a coluna disponível.
-                    child: AspectRatio(
-                      // Usar AspectRatio para manter o aspecto da câmera.
-                      aspectRatio: controller.controller.value.aspectRatio,
-                      child: Container(
-                        decoration: BoxDecoration(
-                          border: Border.all(
-                            color: Colors.indigo,
-                            width: 4.0,
+          : Stack(
+              children: [
+                Center(
+                  child: Column(
+                    children: <Widget>[
+                      Expanded(
+                        // Usar Expanded para preencher toda a coluna disponível.
+                        child: AspectRatio(
+                          // Usar AspectRatio para manter o aspecto da câmera.
+                          aspectRatio: controller.controller.value.aspectRatio,
+                          child: Container(
+                            decoration: BoxDecoration(
+                              border: Border.all(
+                                color: Colors.indigo,
+                                width: 4.0,
+                              ),
+                            ),
+                            child: Stack(
+                              fit: StackFit
+                                  .expand, // Faz o Stack preencher o espaço disponível.
+                              children: <Widget>[
+                                CameraPreview(controller.controller),
+                                BoundingBoxView(
+                                  blocks: controller.textBoxs.value,
+                                  previewSize:
+                                      controller.controller.value.previewSize!,
+                                  screenSize: MediaQuery.of(context).size,
+                                ),
+                              ],
+                            ),
                           ),
                         ),
-                        child: Stack(
-                          fit: StackFit
-                              .expand, // Faz o Stack preencher o espaço disponível.
-                          children: <Widget>[
-                            CameraPreview(controller.controller),
-                            BoundingBoxView(
-                              blocks: controller.textBoxs.value,
-                              previewSize:
-                                  controller.controller.value.previewSize,
-                              screenSize: MediaQuery.of(context).size,
-                            ),
-                          ],
-                        ),
                       ),
-                    ),
+                    ],
                   ),
-                ],
-              ),
+                ),
+                Positioned(
+                  bottom: 20,
+                  left: 0,
+                  right: 0,
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                    children: [
+                      Obx(() => ElevatedButton(
+                            onPressed: () => controller.toggleMonitoring(),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: controller.isMonitoring.value
+                                  ? Colors.red
+                                  : Colors.green,
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 20, vertical: 12),
+                            ),
+                            child: Text(
+                              controller.isMonitoring.value
+                                  ? 'Parar Monitoramento'
+                                  : 'Iniciar Monitoramento',
+                              style: const TextStyle(fontSize: 16),
+                            ),
+                          )),
+                    ],
+                  ),
+                ),
+              ],
             )),
     );
   }
